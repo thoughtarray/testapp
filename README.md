@@ -4,6 +4,19 @@ Ever say to yourself, "Darn, I wish I had a simple HTTP app to test my infrastru
 ## About
 `testapp` is a simple Flask application designed to test web apps calling other web apps.  It has three modes: stand-alone mode, static-dependency mode, and dynamic-dependency mode.
 
+### Installation
+For testing:
+```bash
+git clone https://github.com/thoughtarray/testapp.git
+cd testapp
+
+virtualenv venv
+# or python[2,2.7] -m virtualenv venv
+. venv/bin/activate
+
+python testapp --name foo --port 5000
+```
+
 ### Stand-alone mode
 Not very useful.  It just returns what you tell it to.
 ```sh
