@@ -22,6 +22,9 @@ def index():
     if mode == 'static-dependency':
         return _static_dependency(app.config['S'], flask.request)
 
+    if mode == 'dynamic-dependency':
+        return _dynamic_dependency(app.config['S'], flask.request)
+
 def _stand_alone(settings, request):
     http_code, http_body = settings['return']
 
@@ -38,6 +41,7 @@ def _static_dependency(settings, request):
     is_chain_request = 'chain' in request.args
     chain = []
 
+    # Shorten chain by one link if possible
     if is_chain_request:
         raw_chain = request.args.get('chain', None)
         chain = raw_chain.split(',') if raw_chain else []
@@ -89,6 +93,60 @@ def _static_dependency(settings, request):
     return '{} has multiple dependencies; chain-script request required' \
         .format(settings['name']), 400, None
 
+def _dynamic_dependency(settings, request):
+    is_chain_request = 'chain' in request.args
+    chain = []
+
+    # Shorten chain by one link if possible
+    if is_chain_request:
+        raw_chain = request.args.get('chain', None)
+        chain = raw_chain.split(',') if raw_chain else []
+        if len(chain) and chain[0] == settings['name']: chain = chain[1:]
+
+    http_code, http_body = settings['return']
+
+    # Same action for single or multi deps with chain-script request
+    if is_chain_request:
+        # If chain is done, return
+        if not len(chain):
+            return json.dumps([http_body]), http_code, None
+
+        next_dep = chain[0]
+
+        # Substitute symbol for dependency
+        url = settings['dynamic_dep'].format(next_dep)
+        url = normalize_url(url)
+        headers = s['headers'].copy()
+        for h_k, h_v in headers.items():
+            if '{}' in h_v:
+                headers[h_k] = h_v.format(next_dep)
+
+        query_params = { 'chain': ','.join(chain) }
+
+        try:
+            print headers
+            r = requests.get(url, params=query_params, headers=headers)
+        except requests.ConnectionError as e:
+            loc = urlparse(url).netloc
+            body = "Error contacting {}".format(loc)
+            return json.dumps(body), 404, None
+
+        try:
+            r_content = json.loads(r.content)
+        except ValueError:
+            # Content isn't JSON; must be a plain string; turn into arr
+            r_content = [r.content]
+
+        # Combine last instance's return with this instance's return
+        r_content = [http_body] + r_content if isinstance(r_content, list) \
+            else [http_body, r_content]
+
+        return json.dumps(r_content), http_code, None
+
+    # If non-chain request
+    return http_body, http_code, None
+
+
 @app.route('/meta/health')
 def health():
     return '[]'
@@ -126,16 +184,21 @@ if __name__ == '__main__':
 
     parser.add_argument('-n', '--name', default=NAME,
         help='Name of instance; default: testapp')
+    parser.add_argument('--host', default='127.0.0.1', metavar='IP',
+        help='Host to accept requests; default: 127.0.0.1')
     parser.add_argument('-p', '--port', default=80,
         help='Port of instance; default: 80')
     parser.add_argument('-r', '--return', metavar='CODE:MESSAGE',
         help='Success return; default: 200:NameOfInstance')
     parser.add_argument('-s', '--static', action='append', default=[],
-        dest='static_deps', help='Other faux app to call; format: ' \
-            'host:port[/path]')
+        dest='static_deps', metavar='NAME=URL',
+        help='Starts static-dependency mode (additive property)')
+    parser.add_argument('-d', '--dynamic', metavar='URL', dest='dynamic_dep',
+        help='Starts dynamic-dependency mode; URL may contain "{}"')
     parser.add_argument('-H', '--header', action='append', default=[],
-        dest='headers', help='HTTP header (additive property); may use '
-            '"{}" in dynamic-dependency mode')
+        dest='headers', metavar='KEY=VALUE',
+        help='HTTP header (additive property); VALUE may use "{}" in ' \
+            'dynamic-dependency mode')
 
     s = vars(parser.parse_args())
 
@@ -183,6 +246,23 @@ if __name__ == '__main__':
     if len(s['static_deps']):
         s['mode'] = 'static-dependency'
 
+    # dynamic
+    if s['dynamic_dep'] and len(s['static_deps']):
+        print 'Cannot be ran in static-dependency and dynamic-dependency mode'
+        exit(3)
+
+    s['mode'] = 'dynamic-dependency'
+
+    has_sub_symbol = False
+    if '{}' in s['dynamic_dep']: has_sub_symbol = True
+    for h in s['headers'].values():
+        if '{}' in h: has_sub_symbol = True
+
+    if not has_sub_symbol:
+        print 'URL or a header must have substitue symbol "{}" when in ' \
+            'dynamic-dependency mode'
+        exit(3)
+
     # Run app
     app.config['S'] = s
-    app.run(port=s['port'])
+    app.run(host=s['host'], port=s['port'])

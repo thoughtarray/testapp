@@ -47,6 +47,7 @@ This mode would have to be supported by some kind of proxy.
 ```
 testapp [-nprsd]
 -n, --name string         Name of instance; default: testapp
+--host IP                 host to accept requests; default: 127.0.0.1
 -p, --port PORT           Port of instance; default: 80
 -r, --return CODE:STRING  Success return; default: 200:NameOfInstance
 -s, --static NAME=URL     Starts static-dependency mode (additive property)
@@ -111,22 +112,28 @@ The purpose of this mode is to test out various external-to-app service discover
 
 Assume the use [SmartStack](http://nerds.airbnb.com/smartstack-service-discovery-cloud/) or [Consul Template](https://www.hashicorp.com/blog/introducing-consul-template.html) along with Nginx or HAProxy and proxying via a header:
 ```sh
+# Start a proxy; I use Docker here for convenience
+docker run -d --name proxy \
+  --add-host docker-host:<ip of host> \
+  -p 5000:5000 \
+  -v `pwd`/example/nginx.conf:/etc/nginx/conf.d/default.conf:ro \
+  nginx
+
 # Instance 1
-testapp --name foo --port 5000 \
-  --dynamic "http://localhost:80/" \
+testapp --name foo --host 0.0.0.0 --port 5050 \
+  --dynamic "http://localhost:5000/" \
   --header "X-Route={}"
 
 # Instance 2
-testapp --name bar --port 5001 \
-  --dynamic "http://localhost:80/" \
+testapp --name bar --host 0.0.0.0 --port 5051 \
+  --dynamic "http://localhost:5000/" \
   --header "X-Route={}"
 
 # Instance 3
-testapp --name baz --port 5002 \
-  --dynamic "http://localhost:80/" \
+testapp --name baz --host 0.0.0.0 --port 5052 \
+  --dynamic "http://localhost:5000/" \
   --header "X-Route={}"
 
-curl -w "\n" -H "X-Route: foo" "localhost:80?chain=foo,bar,baz,foo"
-# Should return ["foo", "bar", "baz", "foo"]
+curl -w "\n" -H "X-Route: foo" "localhost:80?chain=foo,bar,baz"
+# Should return ["foo", "bar", "baz"]
 ```
-You may notice that the `curl` request is similar to that in the "Complex dependency structures" example.  The main difference is routing to the foo instance with "foo" as the first stop in the chain-script request.  `testapp` will skip calling itself and move onto the next call in the chain.
