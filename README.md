@@ -134,6 +134,6 @@ testapp --name baz --host 0.0.0.0 --port 5052 \
   --dynamic "http://localhost:5000/" \
   --header "X-Route={}"
 
-curl -w "\n" -H "X-Route: foo" "localhost:80?chain=foo,bar,baz"
+curl -w "\n" -H "X-Route: foo" "localhost:5000?chain=foo,bar,baz"
 # Should return ["foo", "bar", "baz"]
 ```
