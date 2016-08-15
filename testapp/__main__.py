@@ -251,7 +251,7 @@ if __name__ == '__main__':
     if s['dynamic_dep']:
         if len(s['static_deps']):
             print 'Cannot be ran in static-dependency and dynamic-dependency mode'
-        exit(3)
+            exit(3)
 
         s['mode'] = 'dynamic-dependency'
 
