@@ -228,14 +228,18 @@ if __name__ == '__main__':
     http_code, http_body = match.group(1).strip(), match.group(2).strip()
     s['return'] = http_code, http_body
 
-    # static
-    try:
-        s['static_deps'] = _kv_arr_to_dict(s['static_deps'])
-    except ValueError as e:
-        print 'Static (dependency) "{}" must be formatted as KEY=VALUE where ' \
-        'KEY and VALUE are any arbitrary strings'.format(e.value)
-        exit(3)
+    # static deps
+    if len(s['static_deps']):
+        s['mode'] = 'static-dependency'
 
+        try:
+            s['static_deps'] = _kv_arr_to_dict(s['static_deps'])
+        except ValueError as e:
+            print 'Static (dependency) "{}" must be formatted as KEY=VALUE where ' \
+            'KEY and VALUE are any arbitrary strings'.format(e.value)
+            exit(3)
+
+    # headers
     try:
         s['headers'] = _kv_arr_to_dict(s['headers'])
     except ValueError as e:
@@ -243,25 +247,23 @@ if __name__ == '__main__':
             'VALUE are any arbitrary strings'.format(e.value)
         exit(3)
 
-    if len(s['static_deps']):
-        s['mode'] = 'static-dependency'
-
-    # dynamic
-    if s['dynamic_dep'] and len(s['static_deps']):
-        print 'Cannot be ran in static-dependency and dynamic-dependency mode'
+    # dynamic dep
+    if s['dynamic_dep']:
+        if len(s['static_deps']):
+            print 'Cannot be ran in static-dependency and dynamic-dependency mode'
         exit(3)
 
-    s['mode'] = 'dynamic-dependency'
+        s['mode'] = 'dynamic-dependency'
 
-    has_sub_symbol = False
-    if '{}' in s['dynamic_dep']: has_sub_symbol = True
-    for h in s['headers'].values():
-        if '{}' in h: has_sub_symbol = True
+        has_sub_symbol = False
+        if '{}' in s['dynamic_dep']: has_sub_symbol = True
+        for h in s['headers'].values():
+            if '{}' in h: has_sub_symbol = True
 
-    if not has_sub_symbol:
-        print 'URL or a header must have substitue symbol "{}" when in ' \
-            'dynamic-dependency mode'
-        exit(3)
+        if not has_sub_symbol:
+            print 'URL or a header must have substitue symbol "{}" when in ' \
+                'dynamic-dependency mode'
+            exit(3)
 
     # Run app
     app.config['S'] = s
