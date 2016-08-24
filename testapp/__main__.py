@@ -166,7 +166,7 @@ class TestApp:
         return http_body, http_code, None
 
 
-    def _health():
+    def _health(self):
         return '[]'
 
 # ---
