@@ -8,148 +8,166 @@ import flask
 import requests
 
 NAME = 'testapp'
-
 logger = logging.getLogger(NAME)
-app = flask.Flask(NAME)
 
-@app.route('/')
-def index():
-    mode = app.config['S']['mode']
+class TestApp:
+    def __init__(self, name='testapp', mode='stand-alone', path_prefix='',
+            ret=None, static_deps=[], dynamic_dep=None, headers=[]):
+        # Computed values
+        if ret is None: ret = (200, name)
 
-    if mode == 'stand-alone':
-        return _stand_alone(app.config['S'], flask.request)
+        # Build flask
+        app = flask.Flask(name)
 
-    if mode == 'static-dependency':
-        return _static_dependency(app.config['S'], flask.request)
+        app.add_url_rule(path_prefix + '/', 'index', self._index)
+        app.add_url_rule(path_prefix + '/meta/health', 'health', self._health)
 
-    if mode == 'dynamic-dependency':
-        return _dynamic_dependency(app.config['S'], flask.request)
+        self.app = app
+        self.name = name
+        self.mode = mode
+        self.path_prefix = path_prefix
+        self.ret = ret
+        self.static_deps = static_deps
+        self.dynamic_dep = dynamic_dep
+        self.headers = headers
 
-def _stand_alone(settings, request):
-    http_code, http_body = settings['return']
+    def run(self, host='0.0.0.0', port=80):
+        self.app.run(host=host, port=port)
 
-    # stand-alone mode may recieve chain-script requests (most likely the end)
-    is_chain_request = 'chain' in request.args
+    def _index(self):
+        if self.mode == 'stand-alone':
+            return self._stand_alone(flask.request)
 
-    if is_chain_request:
-        return json.dumps(http_body), http_code, None
+        if self.mode == 'static-dependency':
+            return self._static_dependency(flask.request)
 
-    return http_body, http_code, None
+        if self.mode == 'dynamic-dependency':
+            return self._dynamic_dependency(flask.request)
 
-def _static_dependency(settings, request):
-    is_single_dep = len(settings['static_deps']) == 1
-    is_chain_request = 'chain' in request.args
-    chain = []
+    def _stand_alone(self, request):
+        http_code, http_body = self.ret
 
-    # Shorten chain by one link if possible
-    if is_chain_request:
-        raw_chain = request.args.get('chain', None)
-        chain = raw_chain.split(',') if raw_chain else []
-        if len(chain) and chain[0] == settings['name']: chain = chain[1:]
+        # stand-alone mode may recieve chain-script requests (most likely the end)
+        is_chain_request = 'chain' in request.args
 
-    http_code, http_body = settings['return']
+        if is_chain_request:
+            return json.dumps(http_body), http_code, None
 
-    # Same action for single or multi deps with chain-script request
-    if is_chain_request:
-        # If chain is done, return
-        if not len(chain):
-            return json.dumps([http_body]), http_code, None
+        return http_body, http_code, None
 
-        next_dep = chain[0]
-        # Chain link must exist in dependencies
-        if next_dep not in settings['static_deps']:
-            return json.dumps('{} does not have dependency {}' \
-                .format(settings['name'], next_dep)), 404, None
+    def _static_dependency(self, request):
+        is_single_dep = len(self.static_deps) == 1
+        is_chain_request = 'chain' in request.args
+        chain = []
 
-        url = normalize_url(settings['static_deps'][next_dep])
-        query_params = { 'chain': ','.join(chain) }
+        # Shorten chain by one link if possible
+        if is_chain_request:
+            raw_chain = request.args.get('chain', None)
+            chain = raw_chain.split(',') if raw_chain else []
+            if len(chain) and chain[0] == self.name: chain = chain[1:]
 
-        try:
-            r = requests.get(url, params=query_params, headers=settings['headers'])
-        except requests.ConnectionError as e:
-            loc = urlparse(url).netloc
-            body = "Error contacting {}".format(loc)
-            return json.dumps(body), 404, None
+        http_code, http_body = self.ret
 
-        try:
-            r_content = json.loads(r.content)
-        except ValueError:
-            # Content isn't JSON; must be a plain string; turn into arr
-            r_content = [r.content]
+        # Same action for single or multi deps with chain-script request
+        if is_chain_request:
+            # If chain is done, return
+            if not len(chain):
+                return json.dumps([http_body]), http_code, None
 
-        # Combine last instance's return with this instance's return
-        r_content = [http_body] + r_content if isinstance(r_content, list) \
-            else [http_body, r_content]
+            next_dep = chain[0]
+            # Chain link must exist in dependencies
+            if next_dep not in self.static_deps:
+                return json.dumps('{} does not have dependency {}' \
+                    .format(self.name, next_dep)), 404, None
 
-        return json.dumps(r_content), http_code, None
+            url = normalize_url(self.static_deps[next_dep])
+            query_params = { 'chain': ','.join(chain) }
 
-    # Single dep doesn't require chain-script request
-    if is_single_dep:
-        url = normalize_url(settings['static_deps'].items()[0][1])
-        r = requests.get(url, headers=settings['headers'])
-        return r.content, r.status_code, None
+            try:
+                r = requests.get(url, params=query_params, headers=self.headers)
+            except requests.ConnectionError as e:
+                loc = urlparse(url).netloc
+                body = "Error contacting {}".format(loc)
+                return json.dumps(body), 404, None
 
-    # Multi dep requires chain-script request
-    return '{} has multiple dependencies; chain-script request required' \
-        .format(settings['name']), 400, None
+            try:
+                r_content = json.loads(r.content)
+            except ValueError:
+                # Content isn't JSON; must be a plain string; turn into arr
+                r_content = [r.content]
 
-def _dynamic_dependency(settings, request):
-    is_chain_request = 'chain' in request.args
-    chain = []
+            # Combine last instance's return with this instance's return
+            r_content = [http_body] + r_content if isinstance(r_content, list) \
+                else [http_body, r_content]
 
-    # Shorten chain by one link if possible
-    if is_chain_request:
-        raw_chain = request.args.get('chain', None)
-        chain = raw_chain.split(',') if raw_chain else []
-        if len(chain) and chain[0] == settings['name']: chain = chain[1:]
+            return json.dumps(r_content), http_code, None
 
-    http_code, http_body = settings['return']
+        # Single dep doesn't require chain-script request
+        if is_single_dep:
+            url = normalize_url(self.static_deps.items()[0][1])
+            r = requests.get(url, headers=self.headers)
+            return r.content, r.status_code, None
 
-    # Same action for single or multi deps with chain-script request
-    if is_chain_request:
-        # If chain is done, return
-        if not len(chain):
-            return json.dumps([http_body]), http_code, None
+        # Multi dep requires chain-script request
+        return '{} has multiple dependencies; chain-script request required' \
+            .format(self.name), 400, None
 
-        next_dep = chain[0]
+    def _dynamic_dependency(self, request):
+        is_chain_request = 'chain' in request.args
+        chain = []
 
-        # Substitute symbol for dependency
-        url = settings['dynamic_dep'].format(next_dep)
-        url = normalize_url(url)
-        headers = s['headers'].copy()
-        for h_k, h_v in headers.items():
-            if '{}' in h_v:
-                headers[h_k] = h_v.format(next_dep)
+        # Shorten chain by one link if possible
+        if is_chain_request:
+            raw_chain = request.args.get('chain', None)
+            chain = raw_chain.split(',') if raw_chain else []
+            if len(chain) and chain[0] == self.name: chain = chain[1:]
 
-        query_params = { 'chain': ','.join(chain) }
+        http_code, http_body = self.ret
 
-        try:
-            print headers
-            r = requests.get(url, params=query_params, headers=headers)
-        except requests.ConnectionError as e:
-            loc = urlparse(url).netloc
-            body = "Error contacting {}".format(loc)
-            return json.dumps(body), 404, None
+        # Same action for single or multi deps with chain-script request
+        if is_chain_request:
+            # If chain is done, return
+            if not len(chain):
+                return json.dumps([http_body]), http_code, None
 
-        try:
-            r_content = json.loads(r.content)
-        except ValueError:
-            # Content isn't JSON; must be a plain string; turn into arr
-            r_content = [r.content]
+            next_dep = chain[0]
 
-        # Combine last instance's return with this instance's return
-        r_content = [http_body] + r_content if isinstance(r_content, list) \
-            else [http_body, r_content]
+            # Substitute symbol for dependency
+            url = self.dynamic_dep.format(next_dep)
+            url = normalize_url(url)
+            headers = s['headers'].copy()
+            for h_k, h_v in headers.items():
+                if '{}' in h_v:
+                    headers[h_k] = h_v.format(next_dep)
 
-        return json.dumps(r_content), http_code, None
+            query_params = { 'chain': ','.join(chain) }
 
-    # If non-chain request
-    return http_body, http_code, None
+            try:
+                print headers
+                r = requests.get(url, params=query_params, headers=headers)
+            except requests.ConnectionError as e:
+                loc = urlparse(url).netloc
+                body = "Error contacting {}".format(loc)
+                return json.dumps(body), 404, None
+
+            try:
+                r_content = json.loads(r.content)
+            except ValueError:
+                # Content isn't JSON; must be a plain string; turn into arr
+                r_content = [r.content]
+
+            # Combine last instance's return with this instance's return
+            r_content = [http_body] + r_content if isinstance(r_content, list) \
+                else [http_body, r_content]
+
+            return json.dumps(r_content), http_code, None
+
+        # If non-chain request
+        return http_body, http_code, None
 
 
-@app.route('/meta/health')
-def health():
-    return '[]'
+    def _health():
+        return '[]'
 
 # ---
 
@@ -184,11 +202,13 @@ if __name__ == '__main__':
 
     parser.add_argument('-n', '--name', default=NAME,
         help='Name of instance; default: testapp')
-    parser.add_argument('--host', default='127.0.0.1', metavar='IP',
-        help='Host to accept requests; default: 127.0.0.1')
+    parser.add_argument('--host', default='0.0.0.0', metavar='IP',
+        help='Host to accept requests; default: 0.0.0.0')
     parser.add_argument('-p', '--port', default=80,
         help='Port of instance; default: 80')
-    parser.add_argument('-r', '--return', metavar='CODE:MESSAGE',
+    parser.add_argument('-P', '--prefix', default='', metavar='PATH',
+        dest='path_prefix', help='Path to prefix app paths; default: none')
+    parser.add_argument('-r', '--return', metavar='CODE:MESSAGE', dest='ret',
         help='Success return; default: 200:NameOfInstance')
     parser.add_argument('-s', '--static', action='append', default=[],
         dest='static_deps', metavar='NAME=URL',
@@ -203,7 +223,7 @@ if __name__ == '__main__':
     s = vars(parser.parse_args())
 
     # Computed defaults
-    s['return'] = s['return'] or "200:{}".format(s['name'])
+    s['ret'] = s['ret'] or "200:{}".format(s['name'])
 
     # Validate args
 
@@ -219,14 +239,14 @@ if __name__ == '__main__':
         exit(3)
 
     # return
-    match = re.match(r'(\d{3}):(.*)', s['return'])
+    match = re.match(r'(\d{3}):(.*)', s['ret'])
     if not match:
         print 'Return must be formatted as CODE:MESSAGE where CODE is a ' \
             '3-digit http status code and MESSAGE is any arbitrary string'
         exit(3)
 
     http_code, http_body = match.group(1).strip(), match.group(2).strip()
-    s['return'] = http_code, http_body
+    s['ret'] = http_code, http_body
 
     # static deps
     if len(s['static_deps']):
@@ -265,6 +285,11 @@ if __name__ == '__main__':
                 'dynamic-dependency mode'
             exit(3)
 
+    host = s['host']
+    del s['host']
+    port = s['port']
+    del s['port']
+
     # Run app
-    app.config['S'] = s
-    app.run(host=s['host'], port=s['port'])
+    testapp = TestApp(**s)
+    testapp.run(host, port)
